@@ -238,16 +238,8 @@ podTemplate(cloud: 'openshift', label: 'coreos-assembler', yaml: pod, defaultCon
             }
         }
 
-        if (official && s3_stream_dir && utils.path_exists("/etc/fedora-messaging-cfg/fedmsg.toml")) {
-            stage('Sign OSTree') {
-                utils.shwrap("""
-                export AWS_CONFIG_FILE=\${AWS_FCOS_BUILDS_BOT_CONFIG}
-                cosa sign robosignatory --s3 ${s3_stream_dir}/builds \
-                    --extra-fedmsg-keys stream=${params.STREAM} \
-                    --ostree --gpgkeypath /etc/pki/rpm-gpg \
-                    --fedmsg-conf /etc/fedora-messaging-cfg/fedmsg.toml
-                """)
-            }
+        stage('Rojig') {
+            utils.shwrap("coreos-assembler buildextend-rojig")
         }
 
         stage('Build QEMU') {
