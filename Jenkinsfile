@@ -111,7 +111,10 @@ podTemplate(cloud: 'openshift', label: 'coreos-assembler', yaml: pod, defaultCon
         // this is defined IFF we *should* and we *can* upload to S3
         def s3_stream_dir
 
-        if (s3_bucket && utils.path_exists("\${AWS_FCOS_BUILDS_BOT_CONFIG}")) {
+        if (s3_bucket) {
+          if (!utils.path_exists("\${AWS_FCOS_BUILDS_BOT_CONFIG}")) {
+              throw new Exception("Missing \${AWS_FCOS_BUILDS_BOT_CONFIG}")
+          }
           if (official) {
             // see bucket layout in https://github.com/coreos/fedora-coreos-tracker/issues/189
             s3_stream_dir = "${s3_bucket}/prod/streams/${params.STREAM}"
@@ -123,6 +126,8 @@ podTemplate(cloud: 'openshift', label: 'coreos-assembler', yaml: pod, defaultCon
             // devel pipeline is needed.
             s3_stream_dir = "${s3_bucket}/devel/streams/${developer_prefix}"
           }
+        } else {
+            echo("No S3 bucket defined!")
         }
 
         def developer_builddir = "/srv/devel/${developer_prefix}/build"
