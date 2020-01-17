@@ -58,12 +58,6 @@ properties([
       booleanParam(name: 'MINIMAL',
                    defaultValue: (official ? false : true),
                    description: 'Whether to only build the OSTree and qemu images'),
-      // use a string here because passing booleans via `oc start-build -e`
-      // is non-trivial
-      choice(name: 'AWS_REPLICATION',
-             choices: (['false', 'true']),
-             defaultValue: 'false',
-             description: 'Force AWS AMI replication for non-production')
     ]),
     buildDiscarder(logRotator(
         numToKeepStr: '60',
@@ -288,13 +282,6 @@ podTemplate(cloud: 'openshift', label: 'coreos-assembler', yaml: pod, defaultCon
             coreos-assembler compress --compressor xz
             """)
 
-            // Run the coreos-meta-translator against the most recent build,
-            // which will generate a release.json from the meta.json files
-            utils.shwrap("""
-            git clone https://github.com/coreos/fedora-coreos-releng-automation /var/tmp/fcos-releng
-            /var/tmp/fcos-releng/coreos-meta-translator/trans.py --workdir .
-            """)
-
             if (s3_stream_dir) {
               // just upload as public-read for now, but see discussions in
               // https://github.com/coreos/fedora-coreos-tracker/issues/189
@@ -311,39 +298,6 @@ podTemplate(cloud: 'openshift', label: 'coreos-assembler', yaml: pod, defaultCon
               mkdir -p ${developer_builddir}
               cp -aT builds ${developer_builddir}
               """)
-            }
-        }
-
-        if (official && s3_stream_dir && utils.path_exists("/etc/fedora-messaging-cfg/fedmsg.toml")) {
-            stage('Sign Images') {
-                utils.shwrap("""
-                export AWS_CONFIG_FILE=\${AWS_FCOS_BUILDS_BOT_CONFIG}
-                cosa sign robosignatory --s3 ${s3_stream_dir}/builds \
-                    --extra-fedmsg-keys stream=${params.STREAM} \
-                    --images --gpgkeypath /etc/pki/rpm-gpg \
-                    --fedmsg-conf /etc/fedora-messaging-cfg/fedmsg.toml
-                """)
-            }
-        }
-
-        // For now, we auto-release all non-production streams builds. That
-        // way, we can e.g. test testing-devel AMIs easily.
-        //
-        // Since we are only running this stage for non-production (i.e. mechanical
-        // and development) builds we'll default to not doing AWS AMI replication.
-        // That can be overridden by the user setting the AWS_REPLICATION parameter
-        // to true, overriding the default (false).
-        if (official && !(params.STREAM in streams.production)) {
-            stage('Publish') {
-                // use jnlp container in our pod, which has `oc` in it already
-                container('jnlp') {
-                    utils.shwrap("""
-                    oc start-build --wait fedora-coreos-pipeline-release \
-                        -e STREAM=${params.STREAM} \
-                        -e VERSION=${newBuildID} \
-                        -e AWS_REPLICATION=${params.AWS_REPLICATION}
-                    """)
-                }
             }
         }
     }}
