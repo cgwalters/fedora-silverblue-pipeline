@@ -55,9 +55,9 @@ properties([
       booleanParam(name: 'FORCE',
                    defaultValue: false,
                    description: 'Whether to force a rebuild'),
-      booleanParam(name: 'MINIMAL',
-                   defaultValue: (official ? false : true),
-                   description: 'Whether to only build the OSTree and qemu images'),
+      booleanParam(name: 'IMAGES',
+                   defaultValue: false,
+                   description: 'Whether to build live/metal images'),
     ]),
     buildDiscarder(logRotator(
         numToKeepStr: '60',
@@ -236,31 +236,7 @@ podTemplate(cloud: 'openshift', label: 'coreos-assembler', yaml: pod, defaultCon
             utils.shwrap("coreos-assembler buildextend-rojig")
         }
 
-        stage('Build QEMU') {
-            utils.shwrap("""
-            coreos-assembler buildextend-qemu
-            """)
-        }
-
-        // Can't do this yet since we don't listen on SSH by default...
-        // stage('Kola:QEMU') {
-        //     utils.shwrap("""
-        //     coreos-assembler kola run || :
-        //     tar -cf - tmp/kola/ | xz -c9 > _kola_temp.tar.xz
-        //     """)
-        //     archiveArtifacts "_kola_temp.tar.xz"
-        // }
-
-        // archive the image if the tests failed
-        // def report = readJSON file: "tmp/kola/reports/report.json"
-        // if (report["result"] != "PASS") {
-        //     utils.shwrap("coreos-assembler compress --compressor xz")
-        //     archiveArtifacts "builds/latest/**/*.qcow2.xz"
-        //     currentBuild.result = 'FAILURE'
-        //     return
-        // }
-
-        //if (!params.MINIMAL) {
+        if (params.IMAGES) {
             stage('Build Metal') {
                 utils.shwrap("""
                 coreos-assembler buildextend-metal
@@ -272,7 +248,7 @@ podTemplate(cloud: 'openshift', label: 'coreos-assembler', yaml: pod, defaultCon
                 coreos-assembler buildextend-fulliso
                 """)
             }
-        //}
+        }
 
         stage('Archive') {
             // lower to make sure we don't go over and account for overhead
