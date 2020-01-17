@@ -7,16 +7,8 @@ node {
     streams = load("streams.groovy")
     pod = readFile(file: "manifests/pod.yaml")
 
-    // just autodetect if we're in the official prod Jenkins or not
-    official_jenkins = (env.JENKINS_URL == 'https://jenkins-fedora-coreos.apps.ci.centos.org/')
-    def official_job = (env.JOB_NAME == 'fedora-coreos/fedora-coreos-fedora-coreos-pipeline')
-    official = (official_jenkins && official_job)
-
-    if (official) {
-        echo "Running in official (prod) mode."
-    } else {
-        echo "Running in developer mode on ${env.JENKINS_URL}."
-    }
+    // We're not doing this stuff right now
+    official = false
 
     developer_prefix = utils.get_pipeline_annotation('developer-prefix')
     src_config_url = utils.get_pipeline_annotation('source-config-url')
@@ -32,9 +24,6 @@ node {
       developer_prefix = developer_prefix[0..-2]
     }
 }
-
-// Share with the Fedora testing account so we can test it afterwards
-FEDORA_AWS_TESTING_USER_ID = "013116697141"
 
 properties([
     pipelineTriggers([]),
