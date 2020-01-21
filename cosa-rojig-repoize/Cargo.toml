@@ -11,7 +11,7 @@ clap = "2.32.0"
 structopt = "0.2"
 futures = { version = "0.3.1", features = ["compat"] }
 futures-util = "0.3.1"
-futures01 = { package = "futures", version = "0.1", optional = true }
+futures01 = { package = "futures", version = "0.1" }
 bytes04 = { package = "bytes", version = "0.4.12" }
 reqwest = { version = "0.10", features = ["json", "stream"] }
 tokio = { version = "0.2", features = ["full"] }
