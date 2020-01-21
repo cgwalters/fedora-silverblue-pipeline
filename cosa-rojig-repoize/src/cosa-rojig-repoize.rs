@@ -1,15 +1,21 @@
+// Given a coreos-assembler build stream with rojig RPMs, create and manage
+// an rpm-md repo of them.
+
+// TODO: actually createrepo_c, a bit gross since we need
+// to download
+
 use futures::prelude::*;
-use futures01::prelude::{Stream, Future};
-use rusoto_core::RusotoError;
+use futures01::prelude::{Future, Stream};
 use rusoto_core::credential::ProfileProvider;
+use rusoto_core::RusotoError;
 use rusoto_s3::S3;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use structopt::StructOpt;
-use serde::{Serialize, Deserialize};
 
 mod cosa;
 
-const STATEPATH : &'static str = "cosa-rojig-repoize-state.json";
+const STATEPATH: &'static str = "cosa-rojig-repoize-state.json";
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "cosa-rojig-repoize")]
@@ -66,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Err("Invalid s3url")?
     };
-    let s3prefix = s3url.path().to_string();
+    let s3prefix = s3url.path().trim_start_matches("/").to_string();
 
     let s3client = rusoto_s3::S3Client::new_with(
         rusoto_core::request::HttpClient::new()?,
@@ -74,8 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rusoto_core::Region::UsEast1,
     );
 
-    // TODO: This is futures01 and I couldn't get the .compat() method to work,
-    // something with RusotoFuture being special?
     let current_rpms: HashSet<String> = {
         let req = rusoto_s3::ListObjectsRequest {
             bucket: s3bucket.clone(),
@@ -108,39 +112,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             rojig_builds.push(build);
         }
     }
-    let latest_buildid = rojig_builds.last().map(|v| { v.buildid.as_str() });
+    let latest_buildid = rojig_builds.last().map(|v| v.buildid.as_str());
     let latest_buildid = match latest_buildid.as_ref() {
         Some(latest_buildid) => {
-            println!("Total rojig builds: {} latest: {}", rojig_builds.len(), latest_buildid);
+            println!(
+                "Total rojig builds: {} latest: {}",
+                rojig_builds.len(),
+                latest_buildid
+            );
             latest_buildid.to_string()
-        },
+        }
         None => {
             println!("No rojig builds found!");
-            return Ok(())
+            return Ok(());
         }
     };
 
-    let cur_state = match s3client.get_object(rusoto_s3::GetObjectRequest {
-        bucket: s3bucket.clone(),
-        key: format!("{}/{}", s3prefix, STATEPATH),
-        ..Default::default()
-    }).sync() {
+    let cur_state_key = format!("{}/{}", s3prefix, STATEPATH);
+    let cur_state = match s3client
+        .get_object(rusoto_s3::GetObjectRequest {
+            bucket: s3bucket.clone(),
+            key: cur_state_key.clone(),
+            ..Default::default()
+        })
+        .sync()
+    {
         Ok(mut state) => {
-            let body = state.body.take().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "request returned no body"))?;
+            let body = state.body.take().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::Other, "request returned no body")
+            })?;
             let body = body.concat2().wait()?;
-            let val : SyncState = serde_json::from_slice(&body)?;
+            let val: SyncState = serde_json::from_slice(&body)?;
             Some(val)
-        },
+        }
         Err(RusotoError::Service(rusoto_s3::GetObjectError::NoSuchKey(_))) => None,
         Err(e) => Err(e)?,
     };
 
-    println!("Current S3 state: {:?}", cur_state);
+    println!("Current S3 state at {} is {:?}", cur_state_key, cur_state);
 
-    let new_rojig_builds : Vec<_> = rojig_builds.into_iter().filter(|build| {
-        let rojig = build.images.rojig.as_ref().unwrap();
-        !current_rpms.contains(&rojig.path)
-    }).collect();
+    let new_rojig_builds: Vec<_> = rojig_builds
+        .into_iter()
+        .filter(|build| {
+            let rojig = build.images.rojig.as_ref().unwrap();
+            !current_rpms.contains(&rojig.path)
+        })
+        .collect();
     println!("New rojig builds: {}", new_rojig_builds.len());
 
     for build in new_rojig_builds.iter() {
@@ -176,26 +193,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let dosync = if let Some(cur_state) = cur_state.as_ref() {
-        if cur_state.build.as_str() == latest_buildid.as_str() {
-            false
-        } else {
-            true
-        }
+        cur_state.build.as_str() != latest_buildid.as_str()
     } else {
         true
     };
     if dosync {
         let new_state = SyncState {
-            build: latest_buildid.to_string()
+            build: latest_buildid.to_string(),
         };
         let new_state = serde_json::to_vec(&new_state)?;
-        s3client.put_object(rusoto_s3::PutObjectRequest {
-            bucket: s3bucket.clone(),
-            key: format!("{}/{}", s3prefix, STATEPATH),
-            content_length: Some(new_state.len() as i64),
-            body: Some(new_state.into()),
-            ..Default::default()
-        }).sync()?;
+        s3client
+            .put_object(rusoto_s3::PutObjectRequest {
+                bucket: s3bucket.clone(),
+                key: format!("{}/{}", s3prefix, STATEPATH),
+                content_length: Some(new_state.len() as i64),
+                body: Some(new_state.into()),
+                ..Default::default()
+            })
+            .sync()?;
         println!("Completed sync to {}", latest_buildid)
     } else {
         println!("Already synchronized at {}", latest_buildid)
