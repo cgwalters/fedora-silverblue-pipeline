@@ -270,164 +270,22 @@ lock(resource: "build-${params.STREAM}") {
             }
         }
 
-        if (official && s3_stream_dir && utils.path_exists("/etc/fedora-messaging-cfg/fedmsg.toml")) {
-            stage('Sign OSTree') {
+        stage("Metal") {
+            parallel metal: {
                 utils.shwrap("""
-                export AWS_CONFIG_FILE=\${AWS_FCOS_BUILDS_BOT_CONFIG}
-                cosa sign robosignatory --s3 ${s3_stream_dir}/builds \
-                    --extra-fedmsg-keys stream=${params.STREAM} \
-                    --ostree --gpgkeypath /etc/pki/rpm-gpg \
-                    --fedmsg-conf /etc/fedora-messaging-cfg/fedmsg.toml
+                cosa buildextend-metal
+                """)
+            }, metal4k: {
+                utils.shwrap("""
+                cosa buildextend-metal4k
                 """)
             }
         }
 
-        stage('Build QEMU') {
+        stage('Build Live') {
             utils.shwrap("""
-            cosa buildextend-qemu
+            cosa buildextend-live
             """)
-        }
-
-        stage('Kola:QEMU basic') {
-            utils.shwrap("""
-            cosa kola run --basic-qemu-scenarios --no-test-exit-error
-            tar -cf - tmp/kola/ | xz -c9 > kola-run-basic.tar.xz
-            """)
-            archiveArtifacts "kola-run-basic.tar.xz"
-        }
-        if (!utils.checkKolaSuccess("tmp/kola", currentBuild)) {
-            return
-        }
-
-        stage('Kola:QEMU') {
-            // leave 512M for overhead; VMs are 1G each
-            def parallel = ((cosa_memory_request_mb - 512) / 1024) as Integer
-            utils.shwrap("""
-            cosa kola run --parallel ${parallel} --no-test-exit-error
-            tar -cf - tmp/kola/ | xz -c9 > kola-run.tar.xz
-            """)
-            archiveArtifacts "kola-run.tar.xz"
-        }
-        if (!utils.checkKolaSuccess("tmp/kola", currentBuild)) {
-            return
-        }
-
-        stage('Kola:QEMU upgrade') {
-            utils.shwrap("""
-            cosa kola --upgrades --no-test-exit-error
-            tar -cf - tmp/kola-upgrade | xz -c9 > kola-run-upgrade.tar.xz
-            """)
-            archiveArtifacts "kola-run-upgrade.tar.xz"
-        }
-        if (!params.ALLOW_KOLA_UPGRADE_FAILURE && !utils.checkKolaSuccess("tmp/kola-upgrade", currentBuild)) {
-            return
-        }
-
-        if (!params.MINIMAL) {
-
-            stage("Metal") {
-                parallel metal: {
-                    utils.shwrap("""
-                    cosa buildextend-metal
-                    """)
-                }, metal4k: {
-                    utils.shwrap("""
-                    cosa buildextend-metal4k
-                    """)
-                }
-            }
-
-            stage('Build Live') {
-                utils.shwrap("""
-                cosa buildextend-live
-                """)
-            }
-
-            stage('Test Live ISO') {
-                // compress the metal and metal4k images now so we're testing
-                // installs with the image format we ship
-                // lower to make sure we don't go over and account for overhead
-                def xz_memlimit = cosa_memory_request_mb - 512
-                utils.shwrap("""
-                export XZ_DEFAULTS=--memlimit=${xz_memlimit}Mi
-                cosa compress --compressor xz --artifact metal --artifact metal4k
-                """)
-                try {
-                    parallel metal: {
-                        utils.shwrap("kola testiso -S --output-dir tmp/kola-metal")
-                    }, metal4k: {
-                        utils.shwrap("kola testiso -SP --qemu-native-4k --output-dir tmp/kola-metal4k")
-                    }
-                } catch (Throwable e) {
-                    archiveArtifacts "builds/latest/**/*.iso"
-                    throw e
-                } finally {
-                    utils.shwrap("tar -cf - tmp/kola-metal/ | xz -c9 > ${env.WORKSPACE}/kola-testiso-metal.tar.xz")
-                    utils.shwrap("tar -cf - tmp/kola-metal4k/ | xz -c9 > ${env.WORKSPACE}/kola-testiso-metal4k.tar.xz")
-                    archiveArtifacts allowEmptyArchive: true, artifacts: 'kola-testiso*.tar.xz'
-                }
-            }
-
-            // parallel build these artifacts
-            def pbuilds = [:]
-            ["Aliyun", "AWS", "Azure", "DigitalOcean", "Exoscale", "GCP", "IBMCloud", "OpenStack", "VMware", "Vultr"].each {
-                pbuilds[it] = {
-                    def cmd = it.toLowerCase()
-                    utils.shwrap("""
-                    cosa buildextend-${cmd}
-                    """)
-                }
-            }
-            parallel pbuilds
-
-            // Key off of s3_stream_dir: i.e. if we're configured to upload artifacts
-            // to S3, we also take that to mean we should upload an AMI. We could
-            // split this into two separate developer knobs in the future.
-            if (s3_stream_dir) {
-                stage('Upload AWS') {
-                    def suffix = official ? "" : "--name-suffix ${developer_prefix}"
-                    // XXX: hardcode us-east-1 for now
-                    // XXX: use the temporary 'ami-import' subpath for now; once we
-                    // also publish vmdks, we could make this more efficient by
-                    // uploading first, and then pointing ore at our uploaded vmdk
-                    utils.shwrap("""
-                    export AWS_CONFIG_FILE=\${AWS_FCOS_BUILDS_BOT_CONFIG}
-                    cosa buildextend-aws ${suffix} \
-                        --upload \
-                        --build=${newBuildID} \
-                        --region=us-east-1 \
-                        --bucket s3://${s3_bucket}/ami-import \
-                        --grant-user ${FEDORA_AWS_TESTING_USER_ID}
-                    """)
-                }
-            }
-
-            // If there is a config for GCP then we'll upload our image to GCP
-            if (utils.path_exists("\${GCP_IMAGE_UPLOAD_CONFIG}")) {
-                stage('Upload GCP') {
-                    utils.shwrap("""
-                    # pick up the project to use from the config
-                    gcp_project=\$(jq -r .project_id \${GCP_IMAGE_UPLOAD_CONFIG})
-                    # collect today's date for the description
-                    today=\$(date +%Y-%m-%d)
-                    # NOTE: Add --deprecated to create image in deprecated state.
-                    #       We undeprecate in the release pipeline with promote-image.
-                    cosa buildextend-gcp \
-                        --log-level=INFO \
-                        --build=${newBuildID} \
-                        --upload \
-                        --create-image=true \
-                        --deprecated \
-                        --family fedora-coreos-${params.STREAM} \
-                        --license fedora-coreos-${params.STREAM} \
-                        --license "https://compute.googleapis.com/compute/v1/projects/vm-options/global/licenses/enable-vmx" \
-                        --project=\${gcp_project} \
-                        --bucket gs://${gcp_gs_bucket}/image-import \
-                        --json \${GCP_IMAGE_UPLOAD_CONFIG} \
-                        --description=\"Fedora, Fedora CoreOS ${params.STREAM}, ${newBuildID}, ${basearch} published on \$today\"
-                    """)
-                }
-            }
         }
 
         stage('Archive') {
@@ -483,63 +341,6 @@ lock(resource: "build-${params.STREAM}") {
                     --build=${newBuildID} --s3=${s3_stream_dir} --repo=compose \
                     --fedmsg-conf=/etc/fedora-messaging-cfg/fedmsg.toml
                 """)
-            }
-        }
-
-        // Now that the metadata is uploaded go ahead and kick off some tests
-        if (!params.MINIMAL && s3_stream_dir &&
-                utils.path_exists("\${AWS_FCOS_KOLA_BOT_CONFIG}")) {
-            stage('Kola:AWS') {
-                // use jnlp container in our pod, which has `oc` in it already
-                container('jnlp') {
-                    utils.shwrap("""
-                        # We consider the AWS kola tests to be a followup job
-                        # so we aren't adding a `--wait` here.
-                        oc start-build fedora-coreos-pipeline-kola-aws \
-                            -e STREAM=${params.STREAM} \
-                            -e VERSION=${newBuildID} \
-                            -e S3_STREAM_DIR=${s3_stream_dir}
-                    """)
-                }
-            }
-        }
-
-        // Now that the metadata is uploaded go ahead and kick off some tests
-        if (!params.MINIMAL && s3_stream_dir &&
-                utils.path_exists("\${GCP_IMAGE_UPLOAD_CONFIG}")) {
-            stage('Kola:GCP') {
-                // use jnlp container in our pod, which has `oc` in it already
-                container('jnlp') {
-                    utils.shwrap("""
-                        # We consider the GCP kola tests to be a followup job
-                        # so we aren't adding a `--wait` here.
-                        oc start-build fedora-coreos-pipeline-kola-gcp \
-                            -e STREAM=${params.STREAM} \
-                            -e VERSION=${newBuildID} \
-                            -e S3_STREAM_DIR=${s3_stream_dir}
-                    """)
-                }
-            }
-        }
-
-        // For now, we auto-release all non-production streams builds. That
-        // way, we can e.g. test testing-devel AMIs easily.
-        //
-        // Since we are only running this stage for non-production (i.e. mechanical
-        // and development) builds we'll default to not doing AWS AMI replication.
-        // That can be overridden by the user setting the AWS_REPLICATION parameter
-        // to true, overriding the default (false).
-        if (official && !(params.STREAM in streams.production)) {
-            stage('Publish') {
-                // use jnlp container in our pod, which has `oc` in it already
-                container('jnlp') {
-                    utils.shwrap("""
-                    oc start-build --wait fedora-coreos-pipeline-release \
-                        -e STREAM=${params.STREAM} \
-                        -e VERSION=${newBuildID} \
-                        -e AWS_REPLICATION=${params.AWS_REPLICATION}
-                    """)
-                }
             }
         }
 
