@@ -17,7 +17,7 @@ metadata:
 parameters:
   - description: Git source URI for Jenkins jobs
     name: JENKINS_JOBS_URL
-    value: https://github.com/coreos/fedora-coreos-pipeline
+    value: https://github.com/cgwalters/fedora-silverblue-pipeline
   - description: Git branch/tag reference for Jenkins jobs
     name: JENKINS_JOBS_REF
     value: master
@@ -26,7 +26,7 @@ parameters:
     value:
   - description: Git source URI for FCOS config
     name: FCOS_CONFIG_URL
-    value: https://github.com/coreos/fedora-coreos-config
+    value: https://github.com/cgwalters/fedora-silverblue-config
   - description: Git branch/tag reference for FCOS config
     name: FCOS_CONFIG_REF
     value: # empty -> based on stream

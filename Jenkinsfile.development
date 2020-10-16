@@ -13,7 +13,7 @@ node {
     change = checkout(
         [$class: 'GitSCM',
          userRemoteConfigs: [
-            [url: 'https://github.com/coreos/fedora-coreos-config']
+            [url: 'https://github.com/cgwalters/fedora-silverblue-config']
          ],
          branches: streams.as_branches(streams.development)
         ]
